@@ -9,4 +9,4 @@ This program use PySpin, EasyPySpin and OpenCV to help the STM tip location whil
 * OpenCV
 * EasyPySpin
     * EasyPySpin is an unofficial wrapper for FLIR [Spinnaker SDK](https://www.flir.com/products/spinnaker-sdk/). This wrapper provides much the same way as the OpenCV VideoCapture class. 
-* Numpy 1.25.2
+* Numpy 1.26.4 (version > 2 is not supported now)
