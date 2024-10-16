@@ -1,89 +1,116 @@
 import cv2
 import numpy as np
+import os
 
 
-def detect_tip_and_reflection(image):
-    # Convert to grayscale
+def save_image(image, name):
+    cv2.imwrite(f"{name}.jpg", image)
+    cv2.imshow(name, image)
+    cv2.waitKey(0)
+
+
+def preprocess_image(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    save_image(gray, "1_grayscale")
 
-    # Apply Gaussian blur
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    save_image(blurred, "2_blurred")
 
-    # Detect edges
-    edges = cv2.Canny(blurred, 50, 150)
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    save_image(thresh, "3_threshold")
 
-    # Detect lines using Hough Transform
-    lines = cv2.HoughLinesP(edges, 1, np.pi/180,
-                            threshold=50, minLineLength=50, maxLineGap=10)
-
-    # Find the two longest lines (tip and reflection)
-    if lines is not None:
-        sorted_lines = sorted(lines, key=lambda x: np.linalg.norm(
-            x[0][:2]-x[0][2:]), reverse=True)
-        tip_line = sorted_lines[0][0]
-        reflection_line = sorted_lines[1][0]
-        return tip_line, reflection_line
-    return None, None
+    return thresh
 
 
-def calculate_symmetry_line(tip_line, reflection_line):
-    # Calculate midpoints of the lines
-    tip_midpoint = ((tip_line[0] + tip_line[2]) // 2,
-                    (tip_line[1] + tip_line[3]) // 2)
-    reflection_midpoint = (
-        (reflection_line[0] + reflection_line[2]) // 2, (reflection_line[1] + reflection_line[3]) // 2)
+def morphological_operations(binary):
+    kernel = np.ones((3, 3), np.uint8)
+    opening = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
+    save_image(opening, "4_opening")
 
-    # Calculate symmetry line
-    symmetry_line = (tip_midpoint, reflection_midpoint)
-    return symmetry_line
+    closing = cv2.morphologyEx(opening, cv2.MORPH_CLOSE, kernel, iterations=2)
+    save_image(closing, "5_closing")
+
+    return closing
 
 
-def project_tip_to_symmetry_line(tip_line, symmetry_line):
-    # Assuming the tip is at the end of the tip_line closer to the symmetry_line
-    tip_point = (tip_line[2], tip_line[3])  # End point of the tip line
+def detect_tip_and_reflection(processed, original_image):
+    contours, _ = cv2.findContours(
+        processed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Calculate the direction vector of the symmetry line
-    symmetry_vector = (symmetry_line[1][0] - symmetry_line[0]
-                       [0], symmetry_line[1][1] - symmetry_line[0][1])
+    contour_image = original_image.copy()
+    cv2.drawContours(contour_image, contours, -1, (0, 255, 0), 2)
+    save_image(contour_image, "6_all_contours")
 
-    # Calculate the projection
-    t = ((tip_point[0] - symmetry_line[0][0]) * symmetry_vector[0] +
-         (tip_point[1] - symmetry_line[0][1]) * symmetry_vector[1]) / (symmetry_vector[0]**2 + symmetry_vector[1]**2)
+    valid_contours = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 100:  # Filter small contours
+            x, y, w, h = cv2.boundingRect(cnt)
+            aspect_ratio = float(w)/h
+            if 0.1 < aspect_ratio < 10:  # Filter based on aspect ratio
+                valid_contours.append(cnt)
 
-    projected_point = (int(symmetry_line[0][0] + t * symmetry_vector[0]),
-                       int(symmetry_line[0][1] + t * symmetry_vector[1]))
+    filtered_contour_image = original_image.copy()
+    cv2.drawContours(filtered_contour_image,
+                     valid_contours, -1, (0, 255, 0), 2)
+    save_image(filtered_contour_image, "7_filtered_contours")
 
-    return projected_point
+    if len(valid_contours) < 2:
+        print(f"Not enough valid contours. Found: {len(valid_contours)}")
+        return None, None
+
+    # Sort contours by y-coordinate
+    sorted_contours = sorted(
+        valid_contours, key=lambda c: cv2.boundingRect(c)[1])
+
+    tip = sorted_contours[0]
+    reflection = sorted_contours[-1]
+
+    return tip, reflection
+
+
+def calculate_symmetry_line(tip, reflection, image):
+    tip_M = cv2.moments(tip)
+    reflection_M = cv2.moments(reflection)
+
+    tip_cx, tip_cy = int(tip_M['m10']/tip_M['m00']
+                         ), int(tip_M['m01']/tip_M['m00'])
+    reflection_cx, reflection_cy = int(
+        reflection_M['m10']/reflection_M['m00']), int(reflection_M['m01']/reflection_M['m00'])
+
+    mid_x = (tip_cx + reflection_cx) // 2
+
+    return ((mid_x, 0), (mid_x, image.shape[0]))
 
 
 def process_image(image_path):
-    # Read the image
     image = cv2.imread(image_path)
+    save_image(image, "0_original")
 
-    # Detect tip and reflection
-    tip_line, reflection_line = detect_tip_and_reflection(image)
+    processed = preprocess_image(image)
+    morphed = morphological_operations(processed)
 
-    if tip_line is not None and reflection_line is not None:
-        # Calculate symmetry line
-        symmetry_line = calculate_symmetry_line(tip_line, reflection_line)
+    tip, reflection = detect_tip_and_reflection(morphed, image)
 
-        # Project tip to symmetry line
-        contact_point = project_tip_to_symmetry_line(tip_line, symmetry_line)
+    if tip is not None and reflection is not None:
+        result_image = image.copy()
+        cv2.drawContours(result_image, [tip], 0, (0, 255, 0), 2)
+        cv2.drawContours(result_image, [reflection], 0, (0, 255, 0), 2)
 
-        # Draw lines and points
-        cv2.line(image, (tip_line[0], tip_line[1]),
-                 (tip_line[2], tip_line[3]), (0, 255, 0), 2)
-        cv2.line(image, (reflection_line[0], reflection_line[1]),
-                 (reflection_line[2], reflection_line[3]), (0, 255, 0), 2)
-        cv2.line(image, symmetry_line[0], symmetry_line[1], (255, 0, 0), 2)
-        cv2.circle(image, contact_point, 5, (0, 0, 255), -1)
+        symmetry_line = calculate_symmetry_line(tip, reflection, image)
+        cv2.line(result_image, symmetry_line[0],
+                 symmetry_line[1], (255, 0, 0), 2)
 
-        # Display the result
-        cv2.imshow('Processed Image', image)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # Calculate contact point (tip of the tip contour)
+        tip_top = tuple(tip[tip[:, :, 1].argmin()][0])
+        cv2.circle(result_image, tip_top, 5, (0, 0, 255), -1)
+
+        save_image(result_image, "8_final_result")
     else:
         print("Could not detect tip and reflection.")
+
+    cv2.destroyAllWindows()
 
 
 # Usage
