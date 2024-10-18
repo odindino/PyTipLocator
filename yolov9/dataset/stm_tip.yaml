@@ -1,0 +1,13 @@
+# Dataset configuration
+path: ./dataset # 相對路徑，假設yaml文件在yolov9目錄下
+train: images/train
+val: images/val
+
+# Classes
+nc: 1 # 類別數量
+names: ["stm_tip"] # 類別名稱
+
+# YOLOv9 specific parameters
+depth_multiple: 1.0
+width_multiple: 1.0
+anchors: 3
